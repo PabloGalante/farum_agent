@@ -143,6 +143,25 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) (*SendMe
 	}, nil
 }
 
+func (s *Service) GetSessionTimeline(
+	ctx context.Context,
+	sessionID domain.SessionID,
+	limit int,
+) (*domain.Session, []*domain.Message, error) {
+
+	session, err := s.sessionStore.GetSession(sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	msgs, err := s.messageStore.GetMessagesBySession(sessionID, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return session, msgs, nil
+}
+
 // TODO: replace with something like UUID
 func generateID() string {
 	return time.Now().Format("20060102150405.000000000")

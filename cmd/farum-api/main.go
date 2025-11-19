@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"net/http"
 
+	"github.com/PabloGalante/farum-agent/internal/adapters/http"
 	"github.com/PabloGalante/farum-agent/internal/adapters/llm"
 	"github.com/PabloGalante/farum-agent/internal/adapters/storage/memory"
 	"github.com/PabloGalante/farum-agent/internal/app/conversation"
@@ -16,6 +19,14 @@ func main() {
 	messageStore := memory.NewMessageStore()
 
 	svc := conversation.NewService(llmClient, sessionStore, messageStore)
+
+	handler := httpadapter.NewServer(svc)
+
+	addr := ":8080"
+	log.Println("Farum HTTP API listening on", addr)
+	if err := http.ListenAndServe(addr, handler); err != nil {
+		log.Fatal(err)
+	}
 
 	ctx := context.Background()
 
