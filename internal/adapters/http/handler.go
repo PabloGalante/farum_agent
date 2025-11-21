@@ -3,6 +3,7 @@ package httpadapter
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -314,6 +315,8 @@ func badRequest(w http.ResponseWriter, msg string) {
 }
 
 func internalError(w http.ResponseWriter, err error) {
+	log.Printf("internal server error: %v", err)
+
 	writeJSON(w, http.StatusInternalServerError, map[string]string{
 		"error": "internal server error",
 	})
