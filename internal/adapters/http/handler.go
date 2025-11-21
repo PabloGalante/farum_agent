@@ -19,6 +19,9 @@ func NewServer(svc *conversation.Service) http.Handler {
 	s := &Server{svc: svc}
 	mux := http.NewServeMux()
 
+	// healthcheck
+	mux.HandleFunc("/healthz", s.handleHealth)
+
 	// /sessions → create session (POST)
 	mux.HandleFunc("/sessions", s.handleSessions)
 
@@ -26,7 +29,7 @@ func NewServer(svc *conversation.Service) http.Handler {
 	// /sessions/{id}/messages → POST: send message
 	mux.HandleFunc("/sessions/", s.handleSessionWithID)
 
-	return mux
+	return chainMiddlewares(mux, withCORS, withLogging)
 }
 
 // ─────────────────────────────────────────────
@@ -319,5 +322,16 @@ func internalError(w http.ResponseWriter, err error) {
 func methodNotAllowed(w http.ResponseWriter) {
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
 		"error": "method not allowed",
+	})
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
 	})
 }
