@@ -8,7 +8,8 @@ import (
 
 	httpadapter "github.com/PabloGalante/farum-agent/internal/adapters/http"
 	"github.com/PabloGalante/farum-agent/internal/adapters/llm"
-	"github.com/PabloGalante/farum-agent/internal/adapters/storage/memory"
+	firestorestore "github.com/PabloGalante/farum-agent/internal/adapters/storage/firestore"
+	memstore "github.com/PabloGalante/farum-agent/internal/adapters/storage/memory"
 	"github.com/PabloGalante/farum-agent/internal/app/conversation"
 	"github.com/PabloGalante/farum-agent/internal/domain"
 )
@@ -35,17 +36,44 @@ func main() {
 		}
 	}
 
-	sessionStore := memory.NewSessionStore()
-	messageStore := memory.NewMessageStore()
+	// Storage: Firestore or Memory
+	storageBackend := getEnv("FARUM_STORAGE_BACKEND", "memory")
 
+	var sessionStore domain.SessionStore
+	var messageStore domain.MessageStore
+
+	switch storageBackend {
+	case "firestore":
+		projectID := getEnv("FARUM_GCP_PROJECT", "")
+		if projectID == "" {
+			log.Fatal("FARUM_GCP_PROJECT is required for Firestore storage backend")
+		}
+
+		log.Printf("[STORE] Using Firestore storage (project=%s)", projectID)
+		fsStore, err := firestorestore.NewStore(ctx, projectID)
+		if err != nil {
+			log.Fatalf("error initializing Firestore store: %v", err)
+		}
+
+		// 1 store, implements 2 interfaces
+		sessionStore = fsStore
+		messageStore = fsStore
+
+	default:
+		log.Println("[STORE] Using in-memory storage")
+		sessionStore = memstore.NewSessionStore()
+		messageStore = memstore.NewMessageStore()
+	}
+
+	// Conversation Service
 	svc := conversation.NewService(llmClient, sessionStore, messageStore)
 
+	// HTTP server
 	handler := httpadapter.NewServer(svc)
 
-	port := getEnv("PORT", "8080")
+	port := ":" + getEnv("PORT", "8080")
 	log.Println("Farum API listening on port:", port)
-
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
+	if err := http.ListenAndServe(port, handler); err != nil {
 		log.Fatal(err)
 	}
 }
