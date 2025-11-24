@@ -31,6 +31,7 @@ func NewVertexClient(ctx context.Context) (*VertexClient, error) {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		Project:  projectID,
 		Location: location,
+		Backend: genai.BackendVertexAI,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating Vertex AI client: %w", err)
@@ -48,11 +49,11 @@ func (v *VertexClient) GenerateReply(
 	userMessage string,
 	convCtx domain.ConversationContext,
 ) (string, error) {
+	// 1) System's Prompt (identity + mode)
 	system := BuildSystemPrompt(convCtx.Mode)
 
+	// 2) History (user / agent) as conversation
 	var contents []*genai.Content
-
-	// 1) History (user / agent)
 	for _, m := range convCtx.History {
 		var role genai.Role
 		switch m.Author {
@@ -61,36 +62,41 @@ func (v *VertexClient) GenerateReply(
 		case domain.RoleAgent:
 			role = genai.RoleModel
 		default:
-			role = genai.RoleUser // Omit or handle as error
+			role = genai.RoleUser
 		}
 
 		contents = append(contents, genai.NewContentFromText(m.Text, role))
 	}
 
-	// 2) Actual user message
+	// 3) Current user message
 	contents = append(contents, genai.NewContentFromText(userMessage, genai.RoleUser))
+
+	// 4) Model config (without genai.Ptr to avoid generic issues)
+	temp := float32(0.7)
+	topP := float32(0.9)
+
 	outputTokens := int32(8192)
 
 	cfg := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(system, genai.Role("system")),
-		Temperature:       genai.Ptr[float32](0.7),
-		TopP:              genai.Ptr[float32](0.9),
+		// According to official examples, the role here is usually RoleUser, not "system"
+		SystemInstruction: genai.NewContentFromText(system, genai.RoleUser),
+		Temperature:       &temp,
+		TopP:              &topP,
 		MaxOutputTokens:   outputTokens,
 	}
 
+	// 5) Call to Vertex
 	res, err := v.client.Models.GenerateContent(ctx, v.modelName, contents, cfg)
 	if err != nil {
 		return "", fmt.Errorf("vertex generate content: %w", err)
 	}
 
-	if len(res.Candidates) == 0 || res.Candidates[0].Content == nil {
-		return "", fmt.Errorf("vertex returned no candidates")
+	// 6) EXTRACT ONLY THE TEXT, do not print the structs
+	text := res.Text()
+	if text == "" {
+		return "", fmt.Errorf("vertex returned empty text")
 	}
 
-	var out string
-	for _, part := range res.Candidates[0].Content.Parts {
-		out += fmt.Sprint(part)
-	}
-
-	return out, nil
+	return text, nil
 }
+
