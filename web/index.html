@@ -239,6 +239,28 @@
         const modeSelect = document.getElementById("modeSelect");
         const onlineDot = document.getElementById("onlineDot");
 
+        function renderMarkdown(text) {
+            if (!text) return "";
+
+            // Escape basic HTML
+            let escaped = text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+
+            // Bold **...**
+            escaped = escaped.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+            // Italic *...*
+            escaped = escaped.replace(/\*(.+?)\*/g, "<em>$1</em>");
+
+            // Line breaks → <br> (to preserve simple paragraphs)
+            escaped = escaped.replace(/\n/g, "<br>");
+
+            return escaped;
+        }
+
+
         function appendMessage(role, text) {
             const wrapper = document.createElement("div");
             wrapper.classList.add("message", role);
@@ -251,7 +273,7 @@
                 meta.textContent = role === "user" ? "Vos" : "Farum";
 
                 const content = document.createElement("div");
-                content.textContent = text;
+                content.innerHTML = renderMarkdown(text);
 
                 wrapper.appendChild(meta);
                 wrapper.appendChild(content);
