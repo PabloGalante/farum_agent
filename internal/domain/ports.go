@@ -1,8 +1,10 @@
 package domain
 
+import "context"
+
 // LLMClient defines how the core application interacts with an LLM service.
 type LLMClient interface {
-	GenerateReply(prompt string, ctx ConversationContext) (string, error)
+	GenerateReply(ctx context.Context, prompt string, convCtx ConversationContext) (string, error)
 }
 
 // ConversationContext gives the LLM minimal context about the conversation.

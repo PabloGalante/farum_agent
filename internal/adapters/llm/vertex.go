@@ -31,7 +31,6 @@ func NewVertexClient(ctx context.Context) (*VertexClient, error) {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		Project:  projectID,
 		Location: location,
-		Backend:  genai.BackendVertexAI,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating Vertex AI client: %w", err)
@@ -45,25 +44,41 @@ func NewVertexClient(ctx context.Context) (*VertexClient, error) {
 
 // GenerateReply implements domain.LLMClient using Vertex AI.
 func (v *VertexClient) GenerateReply(
+	ctx context.Context,
 	userMessage string,
-	ctx domain.ConversationContext,
+	convCtx domain.ConversationContext,
 ) (string, error) {
-	// We build the prompt with your existing logic.
-	prompt := BuildPrompt(userMessage, ctx)
+	system := BuildSystemPrompt(convCtx.Mode)
 
-	// System + user in Vertex format
-	contents := []*genai.Content{
-		genai.NewContentFromText(prompt.System, genai.RoleModel),
-		genai.NewContentFromText(prompt.User, genai.RoleUser),
+	var contents []*genai.Content
+
+	// 1) History (user / agent)
+	for _, m := range convCtx.History {
+		var role genai.Role
+		switch m.Author {
+		case domain.RoleUser:
+			role = genai.RoleUser
+		case domain.RoleAgent:
+			role = genai.RoleModel
+		default:
+			role = genai.RoleUser // Omit or handle as error
+		}
+
+		contents = append(contents, genai.NewContentFromText(m.Text, role))
 	}
+
+	// 2) Actual user message
+	contents = append(contents, genai.NewContentFromText(userMessage, genai.RoleUser))
+	outputTokens := int32(8192)
 
 	cfg := &genai.GenerateContentConfig{
-		Temperature:     genai.Ptr[float32](0.6),
-		TopP:            genai.Ptr[float32](0.9),
-		MaxOutputTokens: int32(512),
+		SystemInstruction: genai.NewContentFromText(system, genai.Role("system")),
+		Temperature:       genai.Ptr[float32](0.7),
+		TopP:              genai.Ptr[float32](0.9),
+		MaxOutputTokens:   outputTokens,
 	}
 
-	res, err := v.client.Models.GenerateContent(context.Background(), v.modelName, contents, cfg)
+	res, err := v.client.Models.GenerateContent(ctx, v.modelName, contents, cfg)
 	if err != nil {
 		return "", fmt.Errorf("vertex generate content: %w", err)
 	}
@@ -74,7 +89,7 @@ func (v *VertexClient) GenerateReply(
 
 	var out string
 	for _, part := range res.Candidates[0].Content.Parts {
-		out += part.Text
+		out += fmt.Sprint(part)
 	}
 
 	return out, nil

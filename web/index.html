@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Farum – Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: #0f172a;
+            color: #e5e7eb;
+            display: flex;
+            justify-content: center;
+            align-items: stretch;
+            min-height: 100vh;
+        }
+
+        .app {
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            gap: 12px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-left {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .subtitle {
+            font-size: 13px;
+            color: #9ca3af;
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        select,
+        input[type="text"] {
+            background: #020617;
+            border: 1px solid #1f2937;
+            color: #e5e7eb;
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 13px;
+        }
+
+        button {
+            border-radius: 999px;
+            border: none;
+            padding: 6px 14px;
+            font-size: 13px;
+            cursor: pointer;
+            background: #4f46e5;
+            color: white;
+        }
+
+        button.secondary {
+            background: #111827;
+            color: #e5e7eb;
+            border: 1px solid #1f2937;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: default;
+        }
+
+        .status {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+
+        .chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            border-radius: 16px;
+            padding: 12px;
+            background: #020617;
+            border: 1px solid #1f2937;
+            overflow-y: auto;
+            max-height: calc(100vh - 180px);
+        }
+
+        .message {
+            max-width: 80%;
+            border-radius: 16px;
+            padding: 8px 12px;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: #1d4ed8;
+        }
+
+        .message.agent {
+            align-self: flex-start;
+            background: #111827;
+            border: 1px solid #1f2937;
+        }
+
+        .message.system {
+            align-self: center;
+            background: transparent;
+            color: #9ca3af;
+            font-size: 12px;
+        }
+
+        .message-meta {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-bottom: 2px;
+        }
+
+        .composer {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .composer textarea {
+            flex: 1;
+            resize: none;
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-size: 14px;
+            border: 1px solid #1f2937;
+            background: #020617;
+            color: #e5e7eb;
+            height: 40px;
+        }
+
+        .composer button {
+            white-space: nowrap;
+        }
+
+        .small {
+            font-size: 11px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-size: 11px;
+            background: #111827;
+            border: 1px solid #1f2937;
+            color: #9ca3af;
+        }
+
+        .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: #22c55e;
+        }
+
+        .dot.offline {
+            background: #ef4444;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <div class="header">
+            <div class="header-left">
+                <div class="title">Farum</div>
+                <div class="subtitle">Agente de acompañamiento mental – MVP</div>
+                <div class="status" id="statusText">Sin sesión aún</div>
+            </div>
+            <div class="controls">
+                <input type="text" id="userIdInput" placeholder="user_id (ej: pablo)" value="pablo" />
+                <button id="newSessionBtn">Nueva sesión</button>
+                <span class="badge">
+                    <span class="dot" id="onlineDot"></span>
+                    <span id="backendLabel">Backend: localhost:8080</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="chat" id="chat"></div>
+
+        <form class="composer" id="composerForm">
+            <textarea id="messageInput"
+                placeholder="Escribí algo para Farum... (Enter para enviar, Shift+Enter para salto de línea)"></textarea>
+            <button type="submit" id="sendBtn" disabled>Enviar</button>
+        </form>
+        <div class="small" id="hintText">
+            Atajo: Enter para enviar · Shift+Enter para nueva línea
+        </div>
+    </div>
+
+    <script>
+        const apiBase = "http://localhost:8080";
+
+        let sessionId = null;
+        let isSending = false;
+
+        const chatEl = document.getElementById("chat");
+        const statusTextEl = document.getElementById("statusText");
+        const messageInput = document.getElementById("messageInput");
+        const composerForm = document.getElementById("composerForm");
+        const sendBtn = document.getElementById("sendBtn");
+        const newSessionBtn = document.getElementById("newSessionBtn");
+        const userIdInput = document.getElementById("userIdInput");
+        const modeSelect = document.getElementById("modeSelect");
+        const onlineDot = document.getElementById("onlineDot");
+
+        function appendMessage(role, text) {
+            const wrapper = document.createElement("div");
+            wrapper.classList.add("message", role);
+
+            if (role === "system") {
+                wrapper.textContent = text;
+            } else {
+                const meta = document.createElement("div");
+                meta.classList.add("message-meta");
+                meta.textContent = role === "user" ? "Vos" : "Farum";
+
+                const content = document.createElement("div");
+                content.textContent = text;
+
+                wrapper.appendChild(meta);
+                wrapper.appendChild(content);
+            }
+
+            chatEl.appendChild(wrapper);
+            chatEl.scrollTop = chatEl.scrollHeight;
+        }
+
+        function setStatus(text) {
+            statusTextEl.textContent = text;
+        }
+
+        function setOnline(isOnline) {
+            onlineDot.classList.toggle("offline", !isOnline);
+        }
+
+        function setSending(sending) {
+            isSending = sending;
+            sendBtn.disabled = sending || !sessionId;
+            newSessionBtn.disabled = sending;
+            messageInput.disabled = sending || !sessionId;
+            if (sending) {
+                setStatus("Farum está pensando...");
+            } else if (sessionId) {
+                setStatus("Sesión activa: " + sessionId);
+            }
+        }
+
+        async function startSession() {
+            const userId = userIdInput.value.trim() || "anon";
+            const mode = "check_in";
+
+            try {
+                setSending(true);
+                setOnline(true);
+                appendMessage("system", "Creando nueva sesión...");
+
+                const res = await fetch(apiBase + "/sessions", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        preferred_mode: mode,
+                        title: "Sesión con Farum (" + mode + ")",
+                    }),
+                });
+
+                if (!res.ok) {
+                    const text = await res.text();
+                    console.error("Error creating session", res.status, text);
+                    appendMessage("system", "Error creando sesión: " + res.status);
+                    setSending(false);
+                    return;
+                }
+
+                const data = await res.json();
+                sessionId = data.session.id;
+
+                // Clear the chat and show the context of the new session
+                chatEl.innerHTML = "";
+                appendMessage("system", "Sesión creada: " + sessionId + " · Modo: " + mode);
+
+                if (data.welcome_message && data.welcome_message.text) {
+                    appendMessage("agent", data.welcome_message.text);
+                }
+
+                messageInput.disabled = false;
+                messageInput.focus();
+                sendBtn.disabled = false;
+                setSending(false);
+                setStatus("Sesión activa: " + sessionId);
+            } catch (err) {
+                console.error(err);
+                appendMessage("system", "No se pudo conectar con Farum. ¿Está corriendo el backend?");
+                setOnline(false);
+                setSending(false);
+            }
+        }
+
+        async function sendMessage(text) {
+            if (!sessionId) {
+                appendMessage("system", "Primero creá una sesión.");
+                return;
+            }
+            const userId = userIdInput.value.trim() || "anon";
+
+            appendMessage("user", text);
+            setSending(true);
+
+            try {
+                const res = await fetch(apiBase + "/sessions/" + encodeURIComponent(sessionId) + "/messages", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        text: text,
+                    }),
+                });
+
+                if (!res.ok) {
+                    const t = await res.text();
+                    console.error("Error sending message", res.status, t);
+                    appendMessage("system", "Error enviando mensaje: " + res.status);
+                    setSending(false);
+                    return;
+                }
+
+                const data = await res.json();
+                if (data.agent_message && data.agent_message.text) {
+                    appendMessage("agent", data.agent_message.text);
+                } else {
+                    appendMessage("system", "Farum no respondió texto.");
+                }
+
+                setSending(false);
+            } catch (err) {
+                console.error(err);
+                appendMessage("system", "Error de conexión con el backend.");
+                setOnline(false);
+                setSending(false);
+            }
+        }
+
+        // Eventos
+        newSessionBtn.addEventListener("click", () => {
+            startSession();
+        });
+
+        composerForm.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const text = messageInput.value.trim();
+            if (!text || isSending || !sessionId) return;
+
+            messageInput.value = "";
+            sendMessage(text);
+        });
+
+        // Manejar Enter / Shift+Enter
+        messageInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                composerForm.dispatchEvent(new Event("submit"));
+            }
+        });
+
+        // Initial State
+        messageInput.disabled = true;
+        sendBtn.disabled = true;
+        setOnline(false);
+    </script>
+</body>
+
+</html>

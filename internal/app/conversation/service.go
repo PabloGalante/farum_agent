@@ -109,23 +109,29 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) (*SendMe
 		return nil, err
 	}
 
-	replyText, err := s.llm.GenerateReply(in.Text, domain.ConversationContext{
+	mode, err := s.currentModeForSession(session)
+	if err != nil {
+		// if it fails, fall back to what is in the session
+		mode = session.PreferredMode
+	}
+
+	convCtx := domain.ConversationContext{
 		SessionID: session.ID,
-		UserID:    in.UserID,
-		Mode:      session.PreferredMode,
+		UserID:    session.UserID,
+		Mode:      mode,
 		History:   history,
-	})
+	}
+	replyText, err := s.llm.GenerateReply(ctx, in.Text, convCtx)
 	if err != nil {
 		return nil, err
 	}
-
 	agentMsg := &domain.Message{
 		ID:        domain.MessageID(generateID()),
 		SessionID: session.ID,
 		Author:    domain.RoleAgent,
 		Text:      replyText,
 		CreatedAt: s.now(),
-		Mode:      session.PreferredMode,
+		Mode:      mode,
 	}
 
 	if err := s.messageStore.AppendMessage(agentMsg); err != nil {
@@ -165,4 +171,29 @@ func (s *Service) GetSessionTimeline(
 // TODO: replace with something like UUID
 func generateID() string {
 	return time.Now().Format("20060102150405.000000000")
+}
+
+func (s *Service) currentModeForSession(session *domain.Session) (domain.InteractionMode, error) {
+	// Extract messages in the session
+	msgs, err := s.messageStore.GetMessagesBySession(session.ID, 0)
+	if err != nil {
+		return session.PreferredMode, err
+	}
+
+	// Count only user messages (so it doesn't trigger on agent replies)
+	userCount := 0
+	for _, m := range msgs {
+		if m.Author == domain.RoleUser {
+			userCount++
+		}
+	}
+
+	switch {
+	case userCount <= 2:
+		return domain.ModeCheckIn, nil
+	case userCount <= 8:
+		return domain.ModeDeepDive, nil
+	default:
+		return domain.ModeActionPlan, nil
+	}
 }
