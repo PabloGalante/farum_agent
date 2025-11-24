@@ -25,13 +25,13 @@ func NewVertexClient(ctx context.Context) (*VertexClient, error) {
 
 	modelName := os.Getenv("FARUM_MODEL_NAME")
 	if modelName == "" {
-		modelName = "gemini-2.5-flash"
+		modelName = "gemini-2.5-flash-lite"
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		Project:  projectID,
 		Location: location,
-		Backend: genai.BackendVertexAI,
+		Backend:  genai.BackendVertexAI,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating Vertex AI client: %w", err)
@@ -99,4 +99,3 @@ func (v *VertexClient) GenerateReply(
 
 	return text, nil
 }
-
