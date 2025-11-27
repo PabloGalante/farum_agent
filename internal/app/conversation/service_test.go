@@ -17,7 +17,7 @@ func TestStartSessionAndSendMessage(t *testing.T) {
 	sessionStore := memory.NewSessionStore()
 	messageStore := memory.NewMessageStore()
 
-	svc := conversation.NewService(llmClient, sessionStore, messageStore)
+	svc := conversation.NewService(llmClient, sessionStore, messageStore, nil)
 
 	out, err := svc.StartSession(ctx, conversation.StartSessionInput{
 		UserID:        domain.UserID("test-user"),

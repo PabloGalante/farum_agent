@@ -4,83 +4,114 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
+	"time"
 
 	httpadapter "github.com/PabloGalante/farum-agent/internal/adapters/http"
-	"github.com/PabloGalante/farum-agent/internal/adapters/llm"
+	llmadapter "github.com/PabloGalante/farum-agent/internal/adapters/llm"
 	firestorestore "github.com/PabloGalante/farum-agent/internal/adapters/storage/firestore"
 	memstore "github.com/PabloGalante/farum-agent/internal/adapters/storage/memory"
 	"github.com/PabloGalante/farum-agent/internal/app/conversation"
+	"github.com/PabloGalante/farum-agent/internal/app/tools"
+	"github.com/PabloGalante/farum-agent/internal/config"
 	"github.com/PabloGalante/farum-agent/internal/domain"
+	"github.com/PabloGalante/farum-agent/internal/observability"
 )
 
 func main() {
 	ctx := context.Background()
 
-	// Choose between mock and Vertex by ENV (useful for dev)
-	useMock := os.Getenv("FARUM_USE_MOCK_LLM") == "1"
+	// 1) Load centralized configuration
+	cfg := config.Load()
 
+	logger := observability.Logger()
+	logger.Info("starting Farum",
+		"mode", cfg.Mode,
+		"port", cfg.Port,
+		"storage_backend", cfg.StorageBackend,
+		"use_mock_llm", cfg.UseMockLLM,
+	)
+
+	// 2) Create LLMClient according to config
 	var (
 		llmClient domain.LLMClient
 		err       error
 	)
 
-	if useMock {
-		log.Println("[LLM] Using MOCK LLM client")
-		llmClient = llm.NewMockLLM()
+	if cfg.UseMockLLM {
+		logger.Info("[LLM] Using MOCK LLM client")
+		llmClient = llmadapter.NewMockLLM()
 	} else {
-		log.Println("[LLM] Using Vertex LLM client")
-		llmClient, err = llm.NewVertexClient(ctx)
+		logger.Info("[LLM] Using Vertex LLM client",
+			"project", cfg.GCPProjectID,
+			"location", cfg.GCPLocation,
+			"model", cfg.ModelName,
+		)
+
+		llmClient, err = llmadapter.NewVertexClient(ctx, llmadapter.VertexConfig{
+			ProjectID: cfg.GCPProjectID,
+			Location:  cfg.GCPLocation,
+			ModelName: cfg.ModelName,
+		})
 		if err != nil {
-			log.Fatalf("error initializing Vertex LLM client: %v", err)
+			logger.Error("error initializing Vertex LLM client", "error", err)
+			log.Fatal(err)
 		}
 	}
 
-	// Storage: Firestore or Memory
-	storageBackend := getEnv("FARUM_STORAGE_BACKEND", "memory")
-
+	// 3) Storage: Firestore or Memory according to config.StorageBackend
 	var sessionStore domain.SessionStore
 	var messageStore domain.MessageStore
+	var journalStore domain.JournalStore
 
-	switch storageBackend {
+	switch cfg.StorageBackend {
 	case "firestore":
-		projectID := getEnv("FARUM_GCP_PROJECT", "")
-		if projectID == "" {
+		if cfg.GCPProjectID == "" {
+			logger.Error("FARUM_GCP_PROJECT is required for Firestore storage backend", "backend", "firestore")
 			log.Fatal("FARUM_GCP_PROJECT is required for Firestore storage backend")
 		}
 
-		log.Printf("[STORE] Using Firestore storage (project=%s)", projectID)
-		fsStore, err := firestorestore.NewStore(ctx, projectID)
+		logger.Info("[STORE] Using Firestore storage", "project", cfg.GCPProjectID)
+		fsStore, err := firestorestore.NewStore(ctx, cfg.GCPProjectID)
 		if err != nil {
-			log.Fatalf("error initializing Firestore store: %v", err)
+			logger.Error("error initializing Firestore store", "error", err)
+			log.Fatal(err)
 		}
 
-		// 1 store, implements 2 interfaces
+		// 1 store, implements 3 interfaces
 		sessionStore = fsStore
 		messageStore = fsStore
+		journalStore = nil // TODO
 
 	default:
-		log.Println("[STORE] Using in-memory storage")
+		logger.Info("[STORE] Using in-memory storage", "backend", "memory")
 		sessionStore = memstore.NewSessionStore()
 		messageStore = memstore.NewMessageStore()
+		journalStore = memstore.NewJournalStore()
 	}
 
-	// Conversation Service
-	svc := conversation.NewService(llmClient, sessionStore, messageStore)
+	var journalTool *tools.JournalTool
+	if journalStore != nil {
+		journalTool = tools.NewJournalTool(journalStore)
+	}
 
-	// HTTP server
+	// 4) Conversation Service
+	svc := conversation.NewService(llmClient, sessionStore, messageStore, journalTool)
+
+	// 5) HTTP server
 	handler := httpadapter.NewServer(svc)
 
-	port := ":" + getEnv("PORT", "8080")
-	log.Println("Farum API listening on port:", port)
-	if err := http.ListenAndServe(port, handler); err != nil {
+	server := &http.Server{
+		Addr:         ":" + cfg.Port,
+		Handler:      handler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	logger.Info("Farum API listening", "port", cfg.Port)
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Error("HTTP server error", "error", err)
 		log.Fatal(err)
 	}
-}
-
-func getEnv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }

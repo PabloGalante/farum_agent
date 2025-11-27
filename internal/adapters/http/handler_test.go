@@ -11,6 +11,7 @@ import (
 	"github.com/PabloGalante/farum-agent/internal/adapters/llm"
 	"github.com/PabloGalante/farum-agent/internal/adapters/storage/memory"
 	"github.com/PabloGalante/farum-agent/internal/app/conversation"
+	tools "github.com/PabloGalante/farum-agent/internal/app/tools"
 )
 
 func newTestServer(t *testing.T) http.Handler {
@@ -19,8 +20,14 @@ func newTestServer(t *testing.T) http.Handler {
 	llmClient := llm.NewMockLLM()
 	sessionStore := memory.NewSessionStore()
 	messageStore := memory.NewMessageStore()
+	journalStore := memory.NewJournalStore()
 
-	svc := conversation.NewService(llmClient, sessionStore, messageStore)
+	var journalTool *tools.JournalTool
+	if journalStore != nil {
+		journalTool = tools.NewJournalTool(journalStore)
+	}
+
+	svc := conversation.NewService(llmClient, sessionStore, messageStore, journalTool)
 	return httpadapter.NewServer(svc)
 }
 

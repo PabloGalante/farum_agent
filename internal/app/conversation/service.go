@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/PabloGalante/farum-agent/internal/app/agentflow"
+	"github.com/PabloGalante/farum-agent/internal/app/tools"
 	"github.com/PabloGalante/farum-agent/internal/domain"
 )
 
@@ -12,18 +14,29 @@ type Service struct {
 	sessionStore domain.SessionStore
 	messageStore domain.MessageStore
 	now          func() time.Time
+
+	journalTool  *tools.JournalTool
+	orchestrator *agentflow.Orchestrator
 }
 
 func NewService(
 	llm domain.LLMClient,
 	sessionStore domain.SessionStore,
 	messageStore domain.MessageStore,
+	journalTool *tools.JournalTool,
 ) *Service {
+	var toolForOrchestrator tools.Tool
+	if journalTool != nil {
+		toolForOrchestrator = journalTool
+	}
+
 	return &Service{
 		llm:          llm,
 		sessionStore: sessionStore,
 		messageStore: messageStore,
 		now:          time.Now,
+		journalTool:  journalTool,
+		orchestrator: agentflow.NewDefaultOrchestrator(llm, toolForOrchestrator),
 	}
 }
 
@@ -115,10 +128,12 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) (*SendMe
 		Mode:      session.PreferredMode,
 		History:   history,
 	}
-	replyText, err := s.llm.GenerateReply(ctx, in.Text, convCtx)
+
+	replyText, err := s.orchestrator.Run(ctx, in.Text, convCtx)
 	if err != nil {
 		return nil, err
 	}
+
 	agentMsg := &domain.Message{
 		ID:        domain.MessageID(generateID()),
 		SessionID: session.ID,

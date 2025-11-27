@@ -3,11 +3,16 @@ package llm
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/PabloGalante/farum-agent/internal/domain"
 	"google.golang.org/genai"
 )
+
+type VertexConfig struct {
+	ProjectID string
+	Location  string
+	ModelName string
+}
 
 type VertexClient struct {
 	client    *genai.Client
@@ -15,23 +20,21 @@ type VertexClient struct {
 }
 
 // NewVertexClient creates an LLMClient based on Vertex AI (Gemini).
-// Uses environment variables for project and region to simplify.
-func NewVertexClient(ctx context.Context) (*VertexClient, error) {
-	projectID := os.Getenv("FARUM_GCP_PROJECT")
-	location := os.Getenv("FARUM_GCP_LOCATION")
-	if projectID == "" || location == "" {
-		return nil, fmt.Errorf("FARUM_GCP_PROJECT and FARUM_GCP_LOCATION must be set")
+// Now it relies on VertexConfig instead of reading env vars directly.
+func NewVertexClient(ctx context.Context, cfg VertexConfig) (*VertexClient, error) {
+	if cfg.ProjectID == "" || cfg.Location == "" {
+		return nil, fmt.Errorf("VertexConfig.ProjectID and Location must be set")
 	}
 
-	modelName := os.Getenv("FARUM_MODEL_NAME")
+	modelName := cfg.ModelName
 	if modelName == "" {
 		modelName = "gemini-2.5-flash-lite"
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		Project:  projectID,
-		Location: location,
-		Backend:  genai.BackendVertexAI,
+		Project: cfg.ProjectID,
+		Location: cfg.Location,
+		Backend: genai.BackendVertexAI,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating Vertex AI client: %w", err)
@@ -71,14 +74,12 @@ func (v *VertexClient) GenerateReply(
 	// 3) Current user message
 	contents = append(contents, genai.NewContentFromText(userMessage, genai.RoleUser))
 
-	// 4) Model config (without genai.Ptr to avoid generic issues)
+	// 4) Model config
 	temp := float32(0.7)
 	topP := float32(0.9)
-
 	outputTokens := int32(8192)
 
 	cfg := &genai.GenerateContentConfig{
-		// According to official examples, the role here is usually RoleUser, not "system"
 		SystemInstruction: genai.NewContentFromText(system, genai.RoleUser),
 		Temperature:       &temp,
 		TopP:              &topP,
@@ -91,7 +92,7 @@ func (v *VertexClient) GenerateReply(
 		return "", fmt.Errorf("vertex generate content: %w", err)
 	}
 
-	// 6) EXTRACT ONLY THE TEXT, do not print the structs
+	// 6) Extract only text
 	text := res.Text()
 	if text == "" {
 		return "", fmt.Errorf("vertex returned empty text")
