@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/PabloGalante/farum-agent/internal/domain"
+	"github.com/PabloGalante/farum-agent/internal/observability"
 )
 
 // ListenerAgent: focuses on listening and clarifying the user's problem.
@@ -21,6 +22,9 @@ func (a *ListenerAgent) Name() string {
 }
 
 func (a *ListenerAgent) Run(ctx context.Context, in AgentInput) (AgentOutput, error) {
+	log := observability.LoggerFromContext(ctx).With("agent", a.Name())
+	log.Info("listener agent running")
+
 	prompt := fmt.Sprintf(
 		"You are Farum's Listener agent. Your job is to carefully listen, clarify the user's concern, and restate it in a clear, empathetic way.\n\nUser: %s",
 		in.UserMessage,
@@ -28,9 +32,11 @@ func (a *ListenerAgent) Run(ctx context.Context, in AgentInput) (AgentOutput, er
 
 	reply, err := a.llm.GenerateReply(ctx, prompt, in.ConvCtx)
 	if err != nil {
+		log.Error("listener agent error", "error", err)
 		return AgentOutput{}, err
 	}
 
+	log.Info("listener agent success")
 	return AgentOutput{
 		Reply:          reply,
 		UpdatedContext: in.ConvCtx,

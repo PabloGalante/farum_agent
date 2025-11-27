@@ -7,6 +7,7 @@ import (
 	"github.com/PabloGalante/farum-agent/internal/app/agentflow"
 	"github.com/PabloGalante/farum-agent/internal/app/tools"
 	"github.com/PabloGalante/farum-agent/internal/domain"
+	"github.com/PabloGalante/farum-agent/internal/observability"
 )
 
 type Service struct {
@@ -53,6 +54,13 @@ type StartSessionOutput struct {
 func (s *Service) StartSession(ctx context.Context, in StartSessionInput) (*StartSessionOutput, error) {
 	now := s.now()
 
+	log := observability.LoggerFromContext(ctx).With(
+		"user_id", in.UserID,
+		"preferred_mode", in.PreferredMode,
+	)
+	log.Info("starting new session")
+
+
 	session := &domain.Session{
 		ID:            domain.SessionID(generateID()),
 		UserID:        in.UserID,
@@ -63,6 +71,7 @@ func (s *Service) StartSession(ctx context.Context, in StartSessionInput) (*Star
 	}
 
 	if err := s.sessionStore.CreateSession(session); err != nil {
+		log.Error("failed to create session", "error", err)
 		return nil, err
 	}
 
@@ -77,8 +86,11 @@ func (s *Service) StartSession(ctx context.Context, in StartSessionInput) (*Star
 	}
 
 	if err := s.messageStore.AppendMessage(welcome); err != nil {
+		log.Error("failed to append welcome message", "error", err)
 		return nil, err
 	}
+
+	log.Info("session started", "session_id", session.ID)
 
 	return &StartSessionOutput{
 		Session: session,
@@ -102,6 +114,13 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) (*SendMe
 		return nil, err
 	}
 
+	log := observability.LoggerFromContext(ctx).With(
+		"session_id", session.ID,
+		"user_id", session.UserID,
+		"mode", session.PreferredMode,
+	)
+	log.Info("sending message", "text", in.Text)
+
 	now := s.now()
 
 	userMsg := &domain.Message{
@@ -114,11 +133,13 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) (*SendMe
 	}
 
 	if err := s.messageStore.AppendMessage(userMsg); err != nil {
+		log.Error("failed to append user message", "error", err)
 		return nil, err
 	}
 
 	history, err := s.messageStore.GetMessagesBySession(session.ID, 20)
 	if err != nil {
+		log.Error("failed to load history", "error", err)
 		return nil, err
 	}
 
@@ -131,6 +152,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) (*SendMe
 
 	replyText, err := s.orchestrator.Run(ctx, in.Text, convCtx)
 	if err != nil {
+		log.Error("orchestrator failed", "error", err)
 		return nil, err
 	}
 
@@ -144,13 +166,17 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) (*SendMe
 	}
 
 	if err := s.messageStore.AppendMessage(agentMsg); err != nil {
+		log.Error("failed to append agent message", "error", err)
 		return nil, err
 	}
 
 	session.UpdatedAt = s.now()
 	if err := s.sessionStore.UpdateSession(session); err != nil {
+		log.Error("failed to update session", "error", err)
 		return nil, err
 	}
+
+	log.Info("send message completed")
 
 	return &SendMessageOutput{
 		UserMessage:  userMsg,
@@ -164,15 +190,24 @@ func (s *Service) GetSessionTimeline(
 	limit int,
 ) (*domain.Session, []*domain.Message, error) {
 
+	log := observability.LoggerFromContext(ctx).With(
+		"session_id", sessionID,
+		"limit", limit,
+	)
+
 	session, err := s.sessionStore.GetSession(sessionID)
 	if err != nil {
+		log.Error("failed to get session", "error", err)
 		return nil, nil, err
 	}
 
 	msgs, err := s.messageStore.GetMessagesBySession(sessionID, limit)
 	if err != nil {
+		log.Error("failed to get messages", "error", err)
 		return nil, nil, err
 	}
+
+	log.Info("fetched session timeline", "message_count", len(msgs))
 
 	return session, msgs, nil
 }

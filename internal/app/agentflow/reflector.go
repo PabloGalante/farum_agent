@@ -6,6 +6,7 @@ import (
 
 	"github.com/PabloGalante/farum-agent/internal/app/tools"
 	"github.com/PabloGalante/farum-agent/internal/domain"
+	"github.com/PabloGalante/farum-agent/internal/observability"
 )
 
 // ReflectorAgent: helps close the interaction with a brief reflection.
@@ -26,6 +27,9 @@ func (a *ReflectorAgent) Name() string {
 }
 
 func (a *ReflectorAgent) Run(ctx context.Context, in AgentInput) (AgentOutput, error) {
+	log := observability.LoggerFromContext(ctx).With("agent", a.Name())
+	log.Info("reflector agent running")
+
 	prompt := fmt.Sprintf(
 		"You are Farum's Reflector agent. The Planner agent proposed an action plan.\n"+
 			"Your job is to close the conversation with a short reflective message that helps the user\n"+
@@ -36,6 +40,7 @@ func (a *ReflectorAgent) Run(ctx context.Context, in AgentInput) (AgentOutput, e
 
 	reply, err := a.llm.GenerateReply(ctx, prompt, in.ConvCtx)
 	if err != nil {
+		log.Error("reflector agent error", "error", err)
 		return AgentOutput{}, err
 	}
 
@@ -59,6 +64,7 @@ func (a *ReflectorAgent) Run(ctx context.Context, in AgentInput) (AgentOutput, e
 		_, _ = a.journalTool.Call(ctx, tctx, input)
 	}
 
+	log.Info("reflector agent success")
 	return AgentOutput{
 		Reply:          reply,
 		UpdatedContext: updatedCtx,
