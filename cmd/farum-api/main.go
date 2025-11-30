@@ -11,6 +11,7 @@ import (
 	firestorestore "github.com/PabloGalante/farum-agent/internal/adapters/storage/firestore"
 	memstore "github.com/PabloGalante/farum-agent/internal/adapters/storage/memory"
 	"github.com/PabloGalante/farum-agent/internal/app/conversation"
+	journalapp "github.com/PabloGalante/farum-agent/internal/app/journal"
 	"github.com/PabloGalante/farum-agent/internal/app/tools"
 	"github.com/PabloGalante/farum-agent/internal/config"
 	"github.com/PabloGalante/farum-agent/internal/domain"
@@ -77,10 +78,10 @@ func main() {
 			log.Fatal(err)
 		}
 
-		// 1 store, implements 3 interfaces
+		// 1 store, implements 2 interfaces
 		sessionStore = fsStore
 		messageStore = fsStore
-		journalStore = nil // TODO
+		journalStore = nil // TODO: implement FirestoreJournalStore
 
 	default:
 		logger.Info("[STORE] Using in-memory storage", "backend", "memory")
@@ -89,16 +90,21 @@ func main() {
 		journalStore = memstore.NewJournalStore()
 	}
 
+	// 3.1) JournalTool from JournalStore (only if it exists)
 	var journalTool *tools.JournalTool
 	if journalStore != nil {
 		journalTool = tools.NewJournalTool(journalStore)
+		logger.Info("[JOURNAL] JournalTool enabled (in-memory)")
+	} else {
+		logger.Info("[JOURNAL] JournalTool disabled (no JournalStore configured)")
 	}
 
-	// 4) Conversation Service
-	svc := conversation.NewService(llmClient, sessionStore, messageStore, journalTool)
+	// 4) Application services
+	convSvc := conversation.NewService(llmClient, sessionStore, messageStore, journalTool)
+	journalSvc := journalapp.NewService(journalStore)
 
 	// 5) HTTP server
-	handler := httpadapter.NewServer(svc)
+	handler := httpadapter.NewServer(convSvc, journalSvc)
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,

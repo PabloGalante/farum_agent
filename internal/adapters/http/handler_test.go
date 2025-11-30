@@ -11,7 +11,8 @@ import (
 	"github.com/PabloGalante/farum-agent/internal/adapters/llm"
 	"github.com/PabloGalante/farum-agent/internal/adapters/storage/memory"
 	"github.com/PabloGalante/farum-agent/internal/app/conversation"
-	tools "github.com/PabloGalante/farum-agent/internal/app/tools"
+	journalapp "github.com/PabloGalante/farum-agent/internal/app/journal"
+	"github.com/PabloGalante/farum-agent/internal/app/tools"
 )
 
 func newTestServer(t *testing.T) http.Handler {
@@ -27,8 +28,10 @@ func newTestServer(t *testing.T) http.Handler {
 		journalTool = tools.NewJournalTool(journalStore)
 	}
 
-	svc := conversation.NewService(llmClient, sessionStore, messageStore, journalTool)
-	return httpadapter.NewServer(svc)
+	convSvc := conversation.NewService(llmClient, sessionStore, messageStore, journalTool)
+	journalSvc := journalapp.NewService(journalStore)
+
+	return httpadapter.NewServer(convSvc, journalSvc)
 }
 
 func TestHealthz(t *testing.T) {
@@ -56,7 +59,4 @@ func TestCreateSessionAndSendMessage(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d, body=%s", w.Code, w.Body.String())
 	}
-
-	// Could parse the JSON and continue with /sessions/{id}/messages,
-	// but getting a 201 already validates quite a bit of wiring.
 }

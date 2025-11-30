@@ -5,19 +5,25 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/PabloGalante/farum-agent/internal/app/conversation"
+	"github.com/PabloGalante/farum-agent/internal/app/journal"
 	"github.com/PabloGalante/farum-agent/internal/domain"
 )
 
 type Server struct {
-	svc *conversation.Service
+	convSvc    *conversation.Service
+	journalSvc *journal.Service
 }
 
-func NewServer(svc *conversation.Service) http.Handler {
-	s := &Server{svc: svc}
+func NewServer(convSvc *conversation.Service, journalSvc *journal.Service) http.Handler {
+	s := &Server{
+		convSvc:    convSvc,
+		journalSvc: journalSvc,
+	}
 	mux := http.NewServeMux()
 
 	// healthcheck
@@ -29,6 +35,9 @@ func NewServer(svc *conversation.Service) http.Handler {
 	// /sessions/{id}         →  GET: get session + messages
 	// /sessions/{id}/messages → POST: send message
 	mux.HandleFunc("/sessions/", s.handleSessionWithID)
+
+	// /users/{id}/journal → GET: get user's journal entries
+	mux.HandleFunc("/users/", s.handleUserWithID)
 
 	return chainMiddlewares(mux, withCORS, withLogging)
 }
@@ -79,6 +88,30 @@ type sendMessageResponse struct {
 type getSessionResponse struct {
 	Session  sessionResponse   `json:"session"`
 	Messages []messageResponse `json:"messages"`
+}
+
+// Journal DTOs
+
+type journalActionResponse struct {
+	ID          string    `json:"id"`
+	Description string    `json:"description"`
+	Status      string    `json:"status"`
+	Notes       string    `json:"notes,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type journalEntryResponse struct {
+	ID             string                  `json:"id"`
+	SessionID      string                  `json:"session_id"`
+	UserID         string                  `json:"user_id"`
+	CreatedAt      time.Time               `json:"created_at"`
+	UpdatedAt      time.Time               `json:"updated_at"`
+	ProblemSummary string                  `json:"problem_summary"`
+	ActionPlan     []journalActionResponse `json:"action_plan"`
+	Reflection     string                  `json:"reflection"`
+	MoodBefore     string                  `json:"mood_before"`
+	MoodAfter      string                  `json:"mood_after"`
 }
 
 // ─────────────────────────────────────────────
@@ -139,6 +172,37 @@ func (s *Server) handleSessionWithID(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// /users/{id}/journal
+func (s *Server) handleUserWithID(w http.ResponseWriter, r *http.Request) {
+	// expected path:
+	// /users/{id}/journal
+	path := strings.TrimPrefix(r.URL.Path, "/users/")
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.Split(path, "/")
+	userID := parts[0]
+
+	if userID == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "journal" {
+		switch r.Method {
+		case http.MethodGet:
+			s.handleGetUserJournal(w, r, domain.UserID(userID))
+		default:
+			methodNotAllowed(w)
+		}
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
 // ─────────────────────────────────────────────
 // Concrete handlers
 // ─────────────────────────────────────────────
@@ -157,7 +221,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	mode := parseInteractionMode(req.PreferredMode)
 
-	out, err := s.svc.StartSession(
+	out, err := s.convSvc.StartSession(
 		r.Context(),
 		conversation.StartSessionInput{
 			UserID:        domain.UserID(req.UserID),
@@ -171,7 +235,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// To obtain welcome message, request the timeline limited to the 1-2 most recent messages.
-	_, msgs, err := s.svc.GetSessionTimeline(r.Context(), out.Session.ID, 5)
+	_, msgs, err := s.convSvc.GetSessionTimeline(r.Context(), out.Session.ID, 5)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -195,7 +259,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request, id domain.SessionID) {
-	session, msgs, err := s.svc.GetSessionTimeline(r.Context(), id, 0)
+	session, msgs, err := s.convSvc.GetSessionTimeline(r.Context(), id, 0)
 	if err != nil {
 		// Any error is (for simplicity) → 404 if it is "not found"
 		if errors.Is(err, errors.New("session not found")) {
@@ -230,7 +294,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request, sessi
 		return
 	}
 
-	out, err := s.svc.SendMessage(
+	out, err := s.convSvc.SendMessage(
 		r.Context(),
 		conversation.SendMessageInput{
 			SessionID: sessionID,
@@ -246,6 +310,35 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request, sessi
 	resp := sendMessageResponse{
 		UserMessage:  toMessageResponse(out.UserMessage),
 		AgentMessage: toMessageResponse(out.AgentMessage),
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GET /users/{id}/journal
+func (s *Server) handleGetUserJournal(w http.ResponseWriter, r *http.Request, userID domain.UserID) {
+	if s.journalSvc == nil {
+		// Disabled journal (for now this could happen in GCP mode without FirestoreJournalStore)
+		writeJSON(w, http.StatusOK, []journalEntryResponse{})
+		return
+	}
+
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	entries, err := s.journalSvc.GetUserJournal(r.Context(), userID, limit)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+
+	resp := make([]journalEntryResponse, 0, len(entries))
+	for _, e := range entries {
+		resp = append(resp, toJournalEntryResponse(e))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -283,6 +376,33 @@ func toMessagesResponse(msgs []*domain.Message) []messageResponse {
 		out = append(out, toMessageResponse(m))
 	}
 	return out
+}
+
+func toJournalEntryResponse(e *domain.JournalEntry) journalEntryResponse {
+	actions := make([]journalActionResponse, 0, len(e.ActionPlan))
+	for _, a := range e.ActionPlan {
+		actions = append(actions, journalActionResponse{
+			ID:          a.ID,
+			Description: a.Description,
+			Status:      string(a.Status),
+			Notes:       a.Notes,
+			CreatedAt:   a.CreatedAt,
+			UpdatedAt:   a.UpdatedAt,
+		})
+	}
+
+	return journalEntryResponse{
+		ID:             string(e.ID),
+		SessionID:      string(e.SessionID),
+		UserID:         string(e.UserID),
+		CreatedAt:      e.CreatedAt,
+		UpdatedAt:      e.UpdatedAt,
+		ProblemSummary: e.ProblemSummary,
+		ActionPlan:     actions,
+		Reflection:     e.Reflection,
+		MoodBefore:     e.MoodBefore,
+		MoodAfter:      e.MoodAfter,
+	}
 }
 
 func parseInteractionMode(s string) domain.InteractionMode {
